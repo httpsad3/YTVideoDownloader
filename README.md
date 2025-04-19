@@ -1,4 +1,4 @@
-# 📽️ YouTube Downloader + Audio Merger (by Antonio)
+# 📽️ YouTube Downloader + Audio Merger
 
 Este proyecto permite descargar videos de YouTube en **la mayor calidad posible** (resolución máxima), uniendo automáticamente el **video y el audio** en un solo archivo `.mp4`, utilizando `ffmpeg`.
 
