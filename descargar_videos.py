@@ -4,7 +4,7 @@ import subprocess
 import re
 
 # 👉 Cambia esto según lo que necesites
-AGREGAR_INDICE_EN_NOMBRE = True  # True = [0]_video.mp4, False = video.mp4
+AGREGAR_INDICE_EN_NOMBRE = False  # True = [0]_video.mp4, False = video.mp4
 
 def sanitize_filename(name):
     # Reemplaza caracteres problemáticos en nombres de archivo
@@ -61,3 +61,12 @@ with open("links.txt", "r") as file:
 # Ejecutar descargas
 for index, (line_number, url) in enumerate(lines):
     download_best_quality(url, line_number, index)
+
+'''
+ _     _   _                        _ _____
+| |__ | |_| |_ _ __  ___   __ _  __| |___ /
+| '_ \| __| __| '_ \/ __| / _` |/ _` | |_ \
+| | | | |_| |_| |_) \__ \| (_| | (_| |___) |
+|_| |_|\__|\__| .__/|___(_)__,_|\__,_|____/
+              |_|
+'''
