@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { analyzeVideo, VideoTooLongError, VideoUnavailableError } from '@/lib/ytdlp'
+import { analyzeVideo, VideoTooLongError, VideoUnavailableError, YtDlpBinaryMissingError } from '@/lib/ytdlp'
 import { analyzeRequestSchema, InvalidYoutubeUrlError, normalizeYoutubeUrl } from '@/lib/validation'
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit'
 import { config } from '@/lib/config'
+import { debugPayload } from '@/lib/debug'
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
@@ -38,15 +39,29 @@ export async function POST(request: NextRequest) {
     if (error instanceof VideoTooLongError) {
       return NextResponse.json(
         {
-          error: `Este video dura más de ${config.maxVideoDurationMinutes} minutos, el máximo permitido en esta herramienta.`
+          error: `Este video dura más de ${config.maxVideoDurationMinutes} minutos, el máximo permitido en esta herramienta.`,
+          ...debugPayload(error)
         },
         { status: 422 }
       )
     }
     if (error instanceof VideoUnavailableError) {
-      return NextResponse.json({ error: error.message }, { status: 422 })
+      return NextResponse.json({ error: error.message, ...debugPayload(error) }, { status: 422 })
+    }
+    if (error instanceof YtDlpBinaryMissingError) {
+      console.error('yt-dlp binary missing', error)
+      return NextResponse.json(
+        {
+          error: 'El servidor no puede procesar videos en este momento (motor de descarga no disponible).',
+          ...debugPayload(error)
+        },
+        { status: 500 }
+      )
     }
     console.error('analyze error', error)
-    return NextResponse.json({ error: 'No se pudo analizar el video. Intenta de nuevo.' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'No se pudo analizar el video. Intenta de nuevo.', ...debugPayload(error) },
+      { status: 500 }
+    )
   }
 }

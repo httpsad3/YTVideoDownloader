@@ -1,17 +1,50 @@
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { spawn } from 'node:child_process'
 import youtubedl from 'youtube-dl-exec'
 import { ffmpegPath } from './ffmpeg'
 import { maxVideoDurationSeconds } from './config'
 
 // `youtube-dl-exec` no expone `constants` en sus tipos, pero sí existe en
-// runtime (ver su código fuente) — lo necesitamos para invocar el binario de
-// yt-dlp directamente con `child_process.spawn`, sin pasar por el wrapper
-// `.exec()` de la librería (que internamente usa `tinyspawn`, el cual
-// bufferiza TODO el stdout en memoria antes de resolverse; eso es adecuado
-// para capturar JSON/texto, pero inaceptable cuando el stdout es el propio
-// archivo de video/audio que queremos transmitir en streaming).
-const ytdlpBinaryPath = (youtubedl as unknown as { constants: { YOUTUBE_DL_PATH: string } }).constants
-  .YOUTUBE_DL_PATH
+// runtime (ver su código fuente).
+const ytdlpConstants = (
+  youtubedl as unknown as { constants: { YOUTUBE_DL_PATH: string; YOUTUBE_DL_DIR: string } }
+).constants
+
+export class YtDlpBinaryMissingError extends Error {}
+
+/**
+ * Resuelve la ruta al binario de yt-dlp que realmente existe en disco.
+ *
+ * `YOUTUBE_DL_FILENAME=yt-dlp_linux` es obligatorio para que `npm install`
+ * descargue el binario standalone (sin depender de python3, ver README) —
+ * pero esa misma variable se vuelve a leer en runtime para ubicar el
+ * binario, así que si algún comando (`npm run dev`, `npm run start`, etc.)
+ * se ejecuta en un proceso que no la tiene exportada, la ruta calculada por
+ * la librería no existe y el spawn falla con un ENOENT opaco.
+ *
+ * Para no depender de que se recuerde exportar la variable en cada comando,
+ * primero se intenta la ruta que la librería calculó con el entorno actual
+ * y, si no existe, se cae al binario `yt-dlp_linux` que el README pide
+ * instalar explícitamente (el único que este proyecto realmente descarga).
+ */
+function resolveYtdlpBinaryPath(): string {
+  const configuredPath = ytdlpConstants.YOUTUBE_DL_PATH
+  if (existsSync(configuredPath)) return configuredPath
+
+  const fallbackPath = path.join(ytdlpConstants.YOUTUBE_DL_DIR, 'yt-dlp_linux')
+  if (existsSync(fallbackPath)) return fallbackPath
+
+  throw new YtDlpBinaryMissingError(
+    `No se encontró el binario de yt-dlp (se buscó en "${configuredPath}" y en "${fallbackPath}"). ` +
+      'Ejecuta `YOUTUBE_DL_FILENAME=yt-dlp_linux npm install` para descargarlo (ver README, sección "yt-dlp en Vercel").'
+  )
+}
+
+/** Instancia de yt-dlp ligada al binario que realmente existe en disco (ver `resolveYtdlpBinaryPath`). */
+function getYtdlp() {
+  return youtubedl.create(resolveYtdlpBinaryPath())
+}
 
 export class VideoUnavailableError extends Error {}
 export class VideoTooLongError extends Error {
@@ -126,15 +159,19 @@ const NOTABLE_HEIGHTS = [2160, 1440, 1080, 720, 480, 360, 240, 144]
 export async function analyzeVideo(url: string): Promise<VideoAnalysis> {
   let info: RawVideoInfo
   try {
-    info = (await youtubedl(url, {
+    info = (await getYtdlp()(url, {
       dumpSingleJson: true,
       noWarnings: true,
       noPlaylist: true,
       noCheckCertificates: true
     })) as unknown as RawVideoInfo
   } catch (error) {
+    console.error('yt-dlp dumpSingleJson failed', error)
+    // Un binario faltante es un problema de configuración del servidor, no
+    // del video pedido: se propaga tal cual para responder 500, no 422.
+    if (error instanceof YtDlpBinaryMissingError) throw error
     const stderr = error instanceof Error ? error.message : String(error)
-    throw new VideoUnavailableError(translateYtDlpError(stderr))
+    throw new VideoUnavailableError(translateYtDlpError(stderr), { cause: error })
   }
 
   if (info.is_live) {
@@ -221,12 +258,13 @@ function addNullable(a: number | null, b: number | null): number | null {
 
 /**
  * Devuelve el subproceso de yt-dlp con stdout listo para hacer pipe (descarga
- * directa, sin ffmpeg). Se invoca el binario directamente con `spawn` (ver
- * comentario junto a `ytdlpBinaryPath`) para poder transmitir el video/audio
- * en streaming real, sin bufferizarlo en memoria.
+ * directa, sin ffmpeg). Se invoca el binario directamente con `spawn` (en vez
+ * del wrapper `.exec()` de la librería, que bufferiza TODO el stdout en
+ * memoria antes de resolverse — inaceptable cuando el stdout es el propio
+ * archivo de video/audio que queremos transmitir en streaming).
  */
 export function spawnRawFormatStream(url: string, formatId: string) {
-  return spawn(ytdlpBinaryPath, [
+  return spawn(resolveYtdlpBinaryPath(), [
     url,
     '--format',
     formatId,
@@ -241,7 +279,7 @@ export function spawnRawFormatStream(url: string, formatId: string) {
 
 /** Descarga + fusiona video y audio en un archivo local usando ffmpeg, vía las flags nativas de yt-dlp. */
 export function spawnMergeToFile(url: string, formatSelector: string, outputPath: string) {
-  return youtubedl.exec(url, {
+  return getYtdlp().exec(url, {
     format: formatSelector,
     output: outputPath,
     mergeOutputFormat: 'mp4',

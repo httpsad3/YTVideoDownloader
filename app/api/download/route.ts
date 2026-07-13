@@ -5,20 +5,28 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { NextRequest, NextResponse } from 'next/server'
-import { analyzeVideo, spawnMergeToFile, spawnRawFormatStream, VideoTooLongError, VideoUnavailableError } from '@/lib/ytdlp'
+import {
+  analyzeVideo,
+  spawnMergeToFile,
+  spawnRawFormatStream,
+  VideoTooLongError,
+  VideoUnavailableError,
+  YtDlpBinaryMissingError
+} from '@/lib/ytdlp'
 import { downloadRequestSchema, InvalidYoutubeUrlError, normalizeYoutubeUrl } from '@/lib/validation'
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit'
 import { transcodeToMp3 } from '@/lib/ffmpeg'
 import { waitForFirstChunkOrFail } from '@/lib/stream-utils'
 import { contentDispositionHeader, sanitizeFilename } from '@/lib/filename'
 import { config } from '@/lib/config'
+import { debugPayload } from '@/lib/debug'
 
 export const runtime = 'nodejs'
 // Tope real en el plan Hobby de Vercel es 60s; en Pro se puede subir hasta 300s.
 export const maxDuration = 60
 
-function errorResponse(message: string, status: number) {
-  return NextResponse.json({ error: message }, { status })
+function errorResponse(message: string, status: number, error?: unknown) {
+  return NextResponse.json({ error: message, ...(error !== undefined ? debugPayload(error) : {}) }, { status })
 }
 
 export async function POST(request: NextRequest) {
@@ -54,14 +62,19 @@ export async function POST(request: NextRequest) {
     if (error instanceof VideoTooLongError) {
       return errorResponse(
         `Este video dura más de ${config.maxVideoDurationMinutes} minutos, el máximo permitido en esta herramienta.`,
-        422
+        422,
+        error
       )
     }
     if (error instanceof VideoUnavailableError) {
-      return errorResponse(error.message, 422)
+      return errorResponse(error.message, 422, error)
+    }
+    if (error instanceof YtDlpBinaryMissingError) {
+      console.error('yt-dlp binary missing', error)
+      return errorResponse('El servidor no puede procesar videos en este momento (motor de descarga no disponible).', 500, error)
     }
     console.error('download analyze error', error)
-    return errorResponse('No se pudo analizar el video. Intenta de nuevo.', 500)
+    return errorResponse('No se pudo analizar el video. Intenta de nuevo.', 500, error)
   }
 
   const filenameBase = sanitizeFilename(analysis.title)
@@ -76,7 +89,7 @@ export async function POST(request: NextRequest) {
 
     if (option.kind === 'progressive') {
       return streamPassthrough({
-        child: spawnRawFormatStream(url, formatId),
+        spawnChild: () => spawnRawFormatStream(url, formatId),
         filename: videoFilename,
         contentType: 'video/mp4'
       })
@@ -90,7 +103,7 @@ export async function POST(request: NextRequest) {
       return errorResponse('El formato de audio solicitado ya no está disponible, vuelve a analizar el video.', 400)
     }
     return streamPassthrough({
-      child: spawnRawFormatStream(url, formatId),
+      spawnChild: () => spawnRawFormatStream(url, formatId),
       filename: `${filenameBase}.m4a`,
       contentType: 'audio/mp4'
     })
@@ -114,13 +127,20 @@ export async function POST(request: NextRequest) {
     })
   } catch (error) {
     console.error('mp3 transcode error', error)
-    return errorResponse('No se pudo convertir el audio a mp3. Intenta de nuevo.', 502)
+    if (error instanceof YtDlpBinaryMissingError) {
+      return errorResponse('El servidor no puede procesar videos en este momento (motor de descarga no disponible).', 500, error)
+    }
+    return errorResponse('No se pudo convertir el audio a mp3. Intenta de nuevo.', 502, error)
   }
 }
 
-async function streamPassthrough(options: { child: ReturnType<typeof spawnRawFormatStream>; filename: string; contentType: string }) {
+async function streamPassthrough(options: {
+  spawnChild: () => ReturnType<typeof spawnRawFormatStream>
+  filename: string
+  contentType: string
+}) {
   try {
-    const stream = await waitForFirstChunkOrFail(options.child)
+    const stream = await waitForFirstChunkOrFail(options.spawnChild())
     return new NextResponse(Readable.toWeb(stream) as ReadableStream, {
       headers: {
         'Content-Type': options.contentType,
@@ -129,7 +149,10 @@ async function streamPassthrough(options: { child: ReturnType<typeof spawnRawFor
     })
   } catch (error) {
     console.error('passthrough download error', error)
-    return errorResponse('No se pudo descargar el video. Puede que ya no esté disponible.', 502)
+    if (error instanceof YtDlpBinaryMissingError) {
+      return errorResponse('El servidor no puede procesar videos en este momento (motor de descarga no disponible).', 500, error)
+    }
+    return errorResponse('No se pudo descargar el video. Puede que ya no esté disponible.', 502, error)
   }
 }
 
@@ -141,7 +164,10 @@ async function streamMergedFile(options: { url: string; formatSelector: string; 
   } catch (error) {
     console.error('merge error', error)
     await unlink(tempPath).catch(() => {})
-    return errorResponse('No se pudo generar el video en esa calidad. Intenta con otra calidad.', 502)
+    if (error instanceof YtDlpBinaryMissingError) {
+      return errorResponse('El servidor no puede procesar videos en este momento (motor de descarga no disponible).', 500, error)
+    }
+    return errorResponse('No se pudo generar el video en esa calidad. Intenta con otra calidad.', 502, error)
   }
 
   const fileStream = createReadStream(tempPath)

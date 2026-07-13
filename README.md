@@ -72,14 +72,40 @@ En Vercel esto se resuelve con un solo paso: agregar la variable en
 **Project Settings → Environment Variables** para los entornos Production,
 Preview y Development (Vercel la expone automáticamente tanto en el build
 como en runtime). En local, expórtala antes de instalar, como en el comando
-de arriba, o agrégala a tu `.env` y expórtala manualmente antes de correr
-`npm install` (los archivos `.env` no se leen automáticamente durante
-`npm install`, solo en runtime de Next.js).
+de arriba.
 
-Si en el futuro las descargas empiezan a fallar de forma generalizada, es
-buena señal de que YouTube cambió algo y yt-dlp necesita actualizarse —
-revisa la versión del binario (`YOUTUBE_DL_HOST` en la documentación de
-`youtube-dl-exec`) y considera fijar/actualizar el release.
+> **Nota:** si por cualquier motivo el proceso que corre `next dev`/`next
+> start` no tiene la variable exportada (por ejemplo, si abriste una terminal
+> nueva y olvidaste volver a exportarla), `lib/ytdlp.ts` cae automáticamente
+> al binario `yt-dlp_linux` si lo encuentra en `node_modules/youtube-dl-exec/bin`,
+> así que no debería volver a romperse en silencio. Aun así, lo más prolijo
+> es exportar la variable siempre (o copiarla a tu `.env`, ver abajo), ya que
+> el *fallback* asume ese nombre de archivo exacto.
+
+Copia `.env.example` a `.env` (`cp .env.example .env`) si además quieres
+ajustar los límites (duración máxima, rate limiting, bitrate de mp3). Esos
+tres sí son válidos como `.env` porque Next.js los carga automáticamente en
+runtime de `next dev`/`next start`.
+
+### Actualizar yt-dlp
+
+YouTube cambia seguido cosas que rompen extractores viejos, así que yt-dlp
+saca releases con frecuencia. Para forzar que se descargue la última versión
+del binario standalone:
+
+```bash
+rm -f node_modules/youtube-dl-exec/bin/yt-dlp_linux
+YOUTUBE_DL_FILENAME=yt-dlp_linux npm rebuild youtube-dl-exec
+```
+
+En Vercel, un simple **Redeploy** (sin "Use existing Build Cache") vuelve a
+correr `npm install` y descarga el release más reciente, ya que
+`youtube-dl-exec` siempre apunta al último release de yt-dlp en GitHub
+(no fija una versión en `package.json`).
+
+Si las descargas empiezan a fallar de forma generalizada (no solo con un
+video puntual), sospecha primero de esto antes que de un bug del código: es
+la causa más común y no tiene que ver con este proyecto en sí.
 
 ## Despliegue en Vercel
 
