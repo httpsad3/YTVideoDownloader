@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import youtubedl from 'youtube-dl-exec'
 import { ffmpegPath } from './ffmpeg'
 import { maxVideoDurationSeconds } from './config'
+import { getCookiesFilePath } from './cookies'
 
 // `youtube-dl-exec` no expone `constants` en sus tipos, pero sí existe en
 // runtime (ver su código fuente).
@@ -159,11 +160,13 @@ const NOTABLE_HEIGHTS = [2160, 1440, 1080, 720, 480, 360, 240, 144]
 export async function analyzeVideo(url: string): Promise<VideoAnalysis> {
   let info: RawVideoInfo
   try {
+    const cookiesPath = getCookiesFilePath()
     info = (await getYtdlp()(url, {
       dumpSingleJson: true,
       noWarnings: true,
       noPlaylist: true,
-      noCheckCertificates: true
+      noCheckCertificates: true,
+      ...(cookiesPath ? { cookies: cookiesPath } : {})
     })) as unknown as RawVideoInfo
   } catch (error) {
     console.error('yt-dlp dumpSingleJson failed', error)
@@ -264,6 +267,7 @@ function addNullable(a: number | null, b: number | null): number | null {
  * archivo de video/audio que queremos transmitir en streaming).
  */
 export function spawnRawFormatStream(url: string, formatId: string) {
+  const cookiesPath = getCookiesFilePath()
   return spawn(resolveYtdlpBinaryPath(), [
     url,
     '--format',
@@ -273,12 +277,14 @@ export function spawnRawFormatStream(url: string, formatId: string) {
     '--no-playlist',
     '--no-warnings',
     '--no-check-certificates',
-    '--no-part'
+    '--no-part',
+    ...(cookiesPath ? ['--cookies', cookiesPath] : [])
   ])
 }
 
 /** Descarga + fusiona video y audio en un archivo local usando ffmpeg, vía las flags nativas de yt-dlp. */
 export function spawnMergeToFile(url: string, formatSelector: string, outputPath: string) {
+  const cookiesPath = getCookiesFilePath()
   return getYtdlp().exec(url, {
     format: formatSelector,
     output: outputPath,
@@ -288,6 +294,7 @@ export function spawnMergeToFile(url: string, formatSelector: string, outputPath
     noWarnings: true,
     noProgress: true,
     noCheckCertificates: true,
-    noPart: true
+    noPart: true,
+    ...(cookiesPath ? { cookies: cookiesPath } : {})
   })
 }

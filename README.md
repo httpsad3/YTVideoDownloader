@@ -87,6 +87,66 @@ ajustar los límites (duración máxima, rate limiting, bitrate de mp3). Esos
 tres sí son válidos como `.env` porque Next.js los carga automáticamente en
 runtime de `next dev`/`next start`.
 
+### 🍪 Bloqueo por bot-detection de YouTube ("Sign in to confirm you're not a bot")
+
+YouTube puede bloquear las peticiones de yt-dlp con el error *"Sign in to
+confirm you're not a bot. Use --cookies-from-browser or --cookies for the
+authentication"*. Esto pasa incluso en local, y en Vercel (IPs de datacenter,
+compartidas con muchos otros proyectos) es igual o más frecuente.
+
+La mitigación es pasarle a yt-dlp las cookies de una sesión real de YouTube
+con `--cookies`. Esta app soporta configurarlas vía la variable de entorno
+`YTDLP_COOKIES_BASE64`, sin necesidad de tocar código.
+
+**1. Exportar cookies.txt desde el navegador**
+
+- Recomendado: usa una **cuenta de Google secundaria o desechable**, no tu
+  cuenta principal. YouTube puede marcar la cuenta por actividad que detecte
+  como automatizada (muchas descargas, patrones de acceso raros, etc.), y no
+  quieres que eso le pase a tu cuenta personal.
+- Inicia sesión en YouTube con esa cuenta en Chrome o Firefox.
+- Instala la extensión **"Get cookies.txt LOCALLY"** ([Chrome Web
+  Store](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) /
+  [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/get-cookies-txt-locally/)).
+- Entra a [youtube.com](https://youtube.com), abre la extensión y exporta las
+  cookies del sitio actual. Vas a obtener un archivo `cookies.txt` en formato
+  Netscape.
+
+**2. Convertir el archivo a base64**
+
+En Linux (o WSL):
+
+```bash
+base64 -w 0 cookies.txt
+```
+
+Copia todo el output (es una sola línea larga) y pégalo como valor de
+`YTDLP_COOKIES_BASE64` en tu `.env`:
+
+```bash
+YTDLP_COOKIES_BASE64=<pega aquí el base64>
+```
+
+La app decodifica esta variable de forma perezosa (en el primer request que
+la necesita), escribe el `cookies.txt` resultante en `/tmp` y se lo pasa a
+yt-dlp con `--cookies` en todas sus invocaciones (análisis, descarga
+progresiva, fusión con ffmpeg y audio). Si la variable no está seteada, la
+app sigue funcionando exactamente igual que antes, sin cookies.
+
+**3. Configurar la misma variable en Vercel**
+
+En el dashboard del proyecto: **Project Settings → Environment Variables**,
+agrega `YTDLP_COOKIES_BASE64` con el mismo valor base64, para los entornos
+Production, Preview y Development según necesites. Vuelve a desplegar para
+que tome efecto.
+
+> **Nota:** las cookies de sesión expiran o se invalidan periódicamente (por
+> ejemplo, si la cuenta cierra sesión en todos los dispositivos, cambia la
+> contraseña, o YouTube simplemente vence la sesión). Si el bloqueo de
+> bot-detection reaparece más adelante, repite los pasos 1 y 2 para generar
+> cookies nuevas y actualiza la variable de entorno (tanto local como en
+> Vercel).
+
 ### Actualizar yt-dlp
 
 YouTube cambia seguido cosas que rompen extractores viejos, así que yt-dlp
@@ -157,6 +217,7 @@ app/
   api/download/route.ts Streaming de la descarga elegida
 lib/
   ytdlp.ts              Wrapper de yt-dlp: análisis y spawn de streams
+  cookies.ts            Resuelve YTDLP_COOKIES_BASE64 a un cookies.txt en /tmp
   ffmpeg.ts             Ruta al binario de ffmpeg + transcodificación a mp3
   validation.ts         Validación de URL de YouTube + esquemas zod
   rate-limit.ts         Limitador en memoria por IP
